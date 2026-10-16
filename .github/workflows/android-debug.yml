@@ -4,6 +4,11 @@ on:
   push:
   workflow_dispatch:
 
+# The godot-ci image runs steps with /bin/sh (dash). pipefail and [[ ]] need bash.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   tests:
     name: Headless tests

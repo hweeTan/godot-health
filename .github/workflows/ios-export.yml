@@ -30,8 +30,9 @@ jobs:
       - name: Build the HealthKit GDExtension
         run: |
           set -euo pipefail
-          python3 -m pip install --user scons
-          export PATH="$HOME/Library/Python/3.9/bin:$HOME/Library/Python/3.11/bin:$HOME/Library/Python/3.12/bin:$HOME/Library/Python/3.13/bin:$PATH"
+          python3 -m venv "$RUNNER_TEMP/scons-venv"
+          "$RUNNER_TEMP/scons-venv/bin/pip" install scons
+          export PATH="$RUNNER_TEMP/scons-venv/bin:$PATH"
           bash tools/build_healthkit_ios.sh
 
       - name: Export the Xcode project
