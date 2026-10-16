@@ -90,7 +90,7 @@ adb install -r sweatpunk-debug.apk
 
 The APK is a debug build, arm64-v8a only, package `dev.sweatpunk.spike`, signed with the godot-ci debug keystore. Health Connect must be installed on the phone (Android 14+ has it in the system; older devices need the Health Connect app). The health permission sheet is the first thing to try.
 
-The iOS workflow uploads `sweatpunk-ios-xcode`. That project is unsigned. It is for the compile check, not for a phone install.
+The iOS workflow uploads `sweatpunk-ios-xcode`. That project is unsigned. It is for the compile check, not for a phone install. The export preset uses team id `0000000000` because Godot refuses to write an Xcode project with a blank team id. Replace it with the Apple Developer team id before any signed or TestFlight build.
 
 ## Owner setup
 

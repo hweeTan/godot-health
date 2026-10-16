@@ -98,16 +98,20 @@ jobs:
         run: |
           set -euo pipefail
           aapt="$(find /usr/lib/android-sdk/build-tools -name aapt | sort | tail -n 1)"
+          badging="$(mktemp)"
+          manifest="$(mktemp)"
+          "$aapt" dump badging build/android/sweatpunk-debug.apk > "$badging"
+          "$aapt" dump permissions build/android/sweatpunk-debug.apk > "$badging.perms"
+          "$aapt" dump xmltree build/android/sweatpunk-debug.apk AndroidManifest.xml > "$manifest"
           {
             echo "aapt=$aapt"
-            "$aapt" dump badging build/android/sweatpunk-debug.apk | head -n 20
+            head -n 20 "$badging"
             echo "----- permissions -----"
-            "$aapt" dump permissions build/android/sweatpunk-debug.apk
+            cat "$badging.perms"
             echo "----- manifest matches -----"
-            "$aapt" dump xmltree build/android/sweatpunk-debug.apk AndroidManifest.xml \
-              | grep -E -i 'health|APPLICATION_ID|HealthConnect|READ_STEPS|READ_EXERCISE|READ_ACTIVE' \
-              || true
-          } | tee build/android/manifest-evidence.txt
+            grep -E -i 'health|APPLICATION_ID|HealthConnect|READ_STEPS|READ_EXERCISE|READ_ACTIVE' "$manifest" || true
+          } > build/android/manifest-evidence.txt
+          cat build/android/manifest-evidence.txt
 
       - name: Upload the debug APK
         uses: actions/upload-artifact@v4
