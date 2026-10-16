@@ -14,10 +14,15 @@ if env["platform"] == "ios":
     )
     sources.append(apple)
 
-target_name = "bin/libhealthkit.{}.{}".format(env["platform"], env["target"])
 if env["platform"] == "ios":
+    # godot-cpp clears LIBSUFFIX on iOS, so the .a has to be part of the target name.
+    if env.get("ios_simulator"):
+        target_name = "bin/libhealthkit.ios.{}.simulator.a".format(env["target"])
+    else:
+        target_name = "bin/libhealthkit.ios.{}.a".format(env["target"])
     library = env.StaticLibrary(target_name, source=sources)
 else:
+    target_name = "bin/libhealthkit.{}.{}".format(env["platform"], env["target"])
     library = env.SharedLibrary(target_name + env["SHLIBSUFFIX"], source=sources)
 
 Default(library)

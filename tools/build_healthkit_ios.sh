@@ -25,12 +25,20 @@ else
 fi
 "${SCONS[@]}" platform=ios arch=arm64 target=template_debug ios_min_version=15.0 -j"$(sysctl -n hw.ncpu)"
 
-HEALTHKIT_A="$(find "$SRC/bin" -name 'libhealthkit*.a' | head -n 1)"
-GODOTCPP_A="$(find "$CPP/bin" -name 'libgodot-cpp*.a' | head -n 1)"
+HEALTHKIT_A="$(find "$SRC/bin" -type f -name 'libhealthkit*' ! -name '*.o' | head -n 1)"
+GODOTCPP_A="$(find "$CPP/bin" -type f -name 'libgodot-cpp*' | head -n 1)"
 if [[ -z "$HEALTHKIT_A" || -z "$GODOTCPP_A" ]]; then
   echo "Static libraries were not produced." >&2
-  find "$SRC" -name '*.a' >&2 || true
+  find "$SRC" -type f \( -name 'libhealthkit*' -o -name 'libgodot-cpp*' \) >&2 || true
   exit 1
+fi
+if [[ "$HEALTHKIT_A" != *.a ]]; then
+  cp "$HEALTHKIT_A" "${HEALTHKIT_A}.a"
+  HEALTHKIT_A="${HEALTHKIT_A}.a"
+fi
+if [[ "$GODOTCPP_A" != *.a ]]; then
+  cp "$GODOTCPP_A" "${GODOTCPP_A}.a"
+  GODOTCPP_A="${GODOTCPP_A}.a"
 fi
 echo "healthkit: $HEALTHKIT_A"
 echo "godot-cpp: $GODOTCPP_A"

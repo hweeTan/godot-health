@@ -68,13 +68,30 @@ jobs:
       - name: Build the Health Connect plugin
         run: bash tools/build_health_connect.sh
 
+      - name: Install the Android build template and raise AGP for Health Connect
+        run: |
+          set -euo pipefail
+          template_dir="$(find "$HOME/.local/share/godot/export_templates" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+          rm -rf android
+          mkdir -p android/build
+          unzip -q "$template_dir/android_source.zip" -d android/build
+          if [[ ! -f android/build/config.gradle && -f android/build/android_source/config.gradle ]]; then
+            mv android/build/android_source/* android/build/
+          fi
+          test -f android/build/config.gradle
+          # connect-client 1.1.0 refuses AGP older than 8.9.1. Godot 4.7.2 ships 8.6.1.
+          # 8.9.1 matches the template's Gradle 8.11.1 wrapper.
+          sed -i "s/androidGradlePlugin: '8.6.1'/androidGradlePlugin: '8.9.1'/" android/build/config.gradle
+          grep -n "androidGradlePlugin" android/build/config.gradle
+          printf '%s\n' "4.7.2.stable" > android/.build_version
+          touch android/build/.gdignore
+
       - name: Export the debug APK
         run: |
           set -euo pipefail
           mkdir -p build/android
           godot --headless --verbose --path . --import
-          godot --headless --verbose --path . --install-android-build-template --export-debug "Android" build/android/sweatpunk-debug.apk
-          test -f android/build/build.gradle
+          godot --headless --verbose --path . --export-debug "Android" build/android/sweatpunk-debug.apk
           test -f build/android/sweatpunk-debug.apk
 
       - name: Dump Health Connect and AdMob manifest evidence
