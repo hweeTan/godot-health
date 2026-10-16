@@ -1,0 +1,54 @@
+# Signing and store upload. Neither lane runs from CI unless the owner sets
+# the repository variable ENABLE_PLAY_INTERNAL or ENABLE_TESTFLIGHT.
+# Do not put keystore files, .p8 keys, or service-account JSON in git.
+
+default_platform(:android)
+
+platform :android do
+  desc "Upload a signed release AAB to the Play internal track. Gated by ENABLE_PLAY_INTERNAL."
+  lane :internal do
+    json_path = ENV.fetch("PLAY_JSON_PATH", File.expand_path("~/play-service-account.json"))
+    aab_path = ENV.fetch("AAB_PATH", "../build/android/sweatpunk-release.aab")
+    upload_to_play_store(
+      track: "internal",
+      aab: aab_path,
+      json_key: json_path,
+      package_name: "dev.sweatpunk.spike",
+      release_status: "draft",
+      skip_upload_metadata: true,
+      skip_upload_images: true,
+      skip_upload_screenshots: true
+    )
+  end
+end
+
+platform :ios do
+  desc "Sign with match and upload to TestFlight. Gated by ENABLE_TESTFLIGHT."
+  lane :beta do
+    setup_ci if ENV["CI"]
+    api_key = app_store_connect_api_key(
+      key_id: ENV.fetch("APP_STORE_CONNECT_KEY_ID"),
+      issuer_id: ENV.fetch("APP_STORE_CONNECT_ISSUER_ID"),
+      key_content: ENV.fetch("APP_STORE_CONNECT_KEY_BASE64"),
+      is_key_content_base64: true
+    )
+    match(
+      type: "appstore",
+      readonly: true,
+      git_url: ENV.fetch("MATCH_GIT_URL"),
+      app_identifier: "dev.sweatpunk.spike",
+      api_key: api_key
+    )
+    project = ENV.fetch("XCODEPROJ", "../build/ios/sweatpunk.xcodeproj")
+    build_app(
+      project: project,
+      scheme: ENV.fetch("XCODE_SCHEME", "sweatpunk"),
+      export_method: "app-store",
+      xcargs: "CODE_SIGN_STYLE=Manual"
+    )
+    upload_to_testflight(
+      api_key: api_key,
+      skip_waiting_for_build_processing: true
+    )
+  end
+end

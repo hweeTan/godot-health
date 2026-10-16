@@ -1,0 +1,127 @@
+name: iOS unsigned export
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  xcode:
+    name: Export and compile Xcode project
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Godot 4.7.2 and the export templates
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/godot"
+          curl -fsSL -o "$RUNNER_TEMP/godot.zip" \
+            https://github.com/godotengine/godot/releases/download/4.7.2-stable/Godot_v4.7.2-stable_macos.universal.zip
+          unzip -q "$RUNNER_TEMP/godot.zip" -d "$RUNNER_TEMP/godot"
+          xattr -dr com.apple.quarantine "$RUNNER_TEMP/godot/Godot.app" || true
+          curl -fsSL -o "$RUNNER_TEMP/templates.tpz" \
+            https://github.com/godotengine/godot/releases/download/4.7.2-stable/Godot_v4.7.2-stable_export_templates.tpz
+          mkdir -p "$HOME/Library/Application Support/Godot/export_templates/4.7.2.stable"
+          unzip -q "$RUNNER_TEMP/templates.tpz" -d "$RUNNER_TEMP/templates"
+          cp -a "$RUNNER_TEMP/templates/templates/." "$HOME/Library/Application Support/Godot/export_templates/4.7.2.stable/"
+          "$RUNNER_TEMP/godot/Godot.app/Contents/MacOS/Godot" --version
+
+      - name: Build the HealthKit GDExtension
+        run: |
+          set -euo pipefail
+          python3 -m pip install --user scons
+          export PATH="$HOME/Library/Python/3.9/bin:$HOME/Library/Python/3.11/bin:$HOME/Library/Python/3.12/bin:$HOME/Library/Python/3.13/bin:$PATH"
+          bash tools/build_healthkit_ios.sh
+
+      - name: Export the Xcode project
+        run: |
+          set -euo pipefail
+          mkdir -p build/ios
+          "$RUNNER_TEMP/godot/Godot.app/Contents/MacOS/Godot" --headless --verbose --path . \
+            --export-debug "iOS" build/ios/sweatpunk.ipa
+          find build/ios -maxdepth 3 -name '*.xcodeproj' -print
+
+      - name: Compile unsigned
+        run: |
+          set -euo pipefail
+          project="$(find build/ios -name '*.xcodeproj' | head -n 1)"
+          test -n "$project"
+          scheme="$(xcodebuild -project "$project" -list | awk '/Schemes:/{flag=1;next}/^$/{flag=0}flag{print $1; exit}')"
+          echo "project=$project"
+          echo "scheme=$scheme"
+          set +e
+          xcodebuild \
+            -project "$project" \
+            -scheme "$scheme" \
+            -sdk iphoneos \
+            -configuration Debug \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+          status=$?
+          set -e
+          if [[ $status -ne 0 ]]; then
+            echo "First unsigned compile failed. Retrying without the HealthKit entitlement."
+            echo "A device install still needs com.apple.developer.healthkit plus a provisioning profile."
+            /usr/bin/sed -i '' '/CODE_SIGN_ENTITLEMENTS/d' "$project/project.pbxproj" || true
+            xcodebuild \
+              -project "$project" \
+              -scheme "$scheme" \
+              -sdk iphoneos \
+              -configuration Debug \
+              -destination 'generic/platform=iOS' \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGNING_REQUIRED=NO \
+              CODE_SIGN_IDENTITY="" \
+              CODE_SIGN_ENTITLEMENTS="" \
+              build
+          fi
+
+      - name: Upload the Xcode project
+        uses: actions/upload-artifact@v4
+        with:
+          name: sweatpunk-ios-xcode
+          if-no-files-found: error
+          path: build/ios
+
+  testflight:
+    name: TestFlight
+    needs: xcode
+    # Stays skipped until the owner sets ENABLE_TESTFLIGHT=true and adds the Apple secrets.
+    if: ${{ vars.ENABLE_TESTFLIGHT == 'true' }}
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Require Apple secrets
+        env:
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_KEY_BASE64: ${{ secrets.APP_STORE_CONNECT_KEY_BASE64 }}
+          MATCH_GIT_URL: ${{ secrets.MATCH_GIT_URL }}
+          MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+          MATCH_DEPLOY_KEY: ${{ secrets.MATCH_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$APP_STORE_CONNECT_KEY_ID"
+          test -n "$APP_STORE_CONNECT_ISSUER_ID"
+          test -n "$APP_STORE_CONNECT_KEY_BASE64"
+          test -n "$MATCH_GIT_URL"
+          test -n "$MATCH_PASSWORD"
+          test -n "$MATCH_DEPLOY_KEY"
+          mkdir -p ~/.ssh
+          printf '%s\n' "$MATCH_DEPLOY_KEY" > ~/.ssh/match_deploy_key
+          chmod 600 ~/.ssh/match_deploy_key
+
+      - name: Fastlane lane stays uninvoked
+        run: |
+          echo "Secrets are present. This spike does not upload to TestFlight."
+          echo "After match has a distribution certificate, run:"
+          echo "  bundle exec fastlane ios beta"
+          echo "The lane is fastlane/Fastfile, platform ios, lane beta."
+          echo "Unsigned CI strips the HealthKit entitlement only if codesign refuses it."
+          echo "A TestFlight build must keep com.apple.developer.healthkit."

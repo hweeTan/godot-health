@@ -1,0 +1,14 @@
+[configuration]
+
+entry_symbol = "healthkit_library_init"
+compatibility_minimum = "4.7"
+
+[libraries]
+
+ios.debug = "res://addons/healthkit/bin/libhealthkit.ios.template_debug.xcframework"
+
+[dependencies]
+
+ios.debug = {
+    "res://addons/healthkit/bin/libgodot-cpp.ios.template_debug.xcframework": ""
+}
