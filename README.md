@@ -172,30 +172,24 @@ UMP uses `ConsentInformation.update`, then `load_consent_form` when a form is of
 | --- | --- | --- |
 | `.github/workflows/android-debug.yml` | every push | Headless tests, then a debug APK artifact. |
 | `.github/workflows/ios-export.yml` | every push | macOS export of the Xcode project and an unsigned `iphoneos` compile. macOS minutes are real; switch this to a nightly schedule after the spike if the bill matters. |
-| Play internal / TestFlight | only if the variables above are `true` | Secret check, then a printed fastlane command. No upload. |
+| Play internal / TestFlight | only if the variables above are `true` | Secret check, then a printed fastlane command. The job stops there. |
+
+`barichello/godot-ci:4.7.2` starts each step with `sh` (dash). Dash rejects `set -o pipefail` and the step exits 2 before Godot runs. Both container jobs (Headless tests and Build debug APK) died that way on the first Actions run. The Android workflow sets `defaults.run.shell: bash`. Run [38968304179](https://github.com/hweeTan/godot-health/actions/runs/38968304179) logs `shell: bash --noprofile --norc -e -o pipefail {0}` for those steps, and Headless tests printed `TESTS PASSED`.
 
 ## Go / no-go
 
-No physical phone or tablet was available in this environment. "Works" means a desktop test or a compiler produced the artifact. "Partially" means the code and packaging are in place and a device still has to run them. "Blocked" means the spike could not build that path.
+No physical phone or tablet was available. "Works" means a desktop test or a CI compiler produced the artifact. "Partially" means the code and packaging are in the CI logs and a device still has to run them. Evidence below is from commit `10917b6` (16 Oct 2026).
 
 | Integration | Status | Evidence | Still needs a device |
 | --- | --- | --- | --- |
-| Guest identity | Works | `godot --headless res://tests/test_runner.tscn` printed `TESTS PASSED` on Godot 4.7.2. The test creates a UUID, reloads it, and rejects `OS.get_unique_id`. | Nothing for the spike. Account linking waits on Nakama. |
-| Nakama login | Prepared, not run | `NakamaSlot` returns `local_guest` or `nakama_unwired`. The SDK is not vendored. | A Nakama host, then Apple and Google link tokens. |
-| Reading timer | Works | Same test run: 125 seconds stores as 2 minutes, a second 60 second session persists 185 seconds. | Confirm the timer stops when the phone is backgrounded. The code listens for pause and focus-out. |
-| Pixel sprite | Works | Test checks a 64×64 PNG and the project settings `default_texture_filter=0`, `scale_mode="integer"`, `snap_2d_transforms_to_pixel=true`, 360×640. Import is lossless with mipmaps off (`art/characters/runner_placeholder.png.import`). The debug `TextureRect` forces nearest. | A glance at the phone to confirm the integer scale looks the way you want. |
-| Health Connect | Partially | `./gradlew :plugin:assemble` succeeded (debug and release AARs, `HealthConnect-debug.aar`). Permissions, the rationale activity, and the plugin meta-data are in the library manifest. | Permission sheet, today's steps, a manual entry versus a watch/phone recording, and a phone with no Health Connect provider. |
-| HealthKit | Partially, until the iOS workflow finishes | GDExtension sources, entitlement, usage strings, and `HealthKit.framework` link are in the export preset and export plugin. The binary is built only on macOS CI. | Authorization dialog, step and workout reads, a sample with Was User Entered, and a signed install. The unsigned job may strip the entitlement; that is a CI compromise, not the device configuration. |
-| AdMob rewarded test ad + UMP | Partially | Plugin v5.1.0 is vendored. Headless import downloaded both 4.7.2 platform zips. Test ids are the ones in the table above. | Initialize, load, and show the rewarded test ad. Confirm the UMP form appears under EEA debug geography. Ads need a network and a real mobile build. |
-| Android debug APK | See the Actions run | Workflow `.github/workflows/android-debug.yml` builds `sweatpunk-debug-apk`. The manifest dump in that artifact is the packaging evidence for Health Connect and the AdMob app id. | Sideload, then the health and ad rows above. |
-| iOS unsigned compile | See the Actions run | Workflow `.github/workflows/ios-export.yml`. | A Mac signing setup before TestFlight. |
-| Play internal upload | Prepared, off | `ENABLE_PLAY_INTERNAL` is unset, so the job is skipped. Lane `android internal` is in `fastlane/Fastfile`. | Play Console app, upload key, and a release AAB. The debug APK is not that artifact. |
-| TestFlight | Prepared, off | `ENABLE_TESTFLIGHT` is unset. Lane `ios beta` is in `fastlane/Fastfile`. | Apple Developer membership, match repo, and the HealthKit entitlement on the App ID. |
-
-Local checks behind the table:
-
-- Godot 4.7.2.stable.official.ed1daf0bf, headless, `TESTS PASSED`, and the debug scene survived `--quit-after 2`.
-- Health Connect Gradle build: `BUILD SUCCESSFUL`, both AARs produced.
-- AdMob headless installer logged both template zips extracted.
-
-Update this table from the pull request's Actions logs if either workflow fails. A red iOS job is a blocker to record here, not a silent pass.
+| Guest identity | Works | [Android run 38968304179](https://github.com/hweeTan/godot-health/actions/runs/38968304179), job Headless tests: `TESTS PASSED`. The test creates a UUID, reloads it, and rejects `OS.get_unique_id`. | Account linking waits on Nakama. |
+| Nakama login | Prepared, not run | `NakamaSlot` returns `local_guest` when the host is empty and `nakama_unwired` when a host is set. The Nakama SDK is absent from the repo. | A Nakama host, then Apple and Google link tokens. |
+| Reading timer | Works | Same headless run: 125 seconds stores as 2 minutes, and a second 60 second session persists 185 seconds. The service also stops on pause and focus-out. | Confirm that stop on a backgrounded phone. |
+| Pixel sprite | Works | Same test checks a 64×64 PNG and `default_texture_filter=0`, `scale_mode="integer"`, `snap_2d_transforms_to_pixel=true`, 360×640. Import is lossless with mipmaps off (`art/characters/runner_placeholder.png.import`). The debug `TextureRect` forces nearest. | A glance on the phone at the integer scale. |
+| Health Connect | Partially | Same Android run: plugin Gradle `BUILD SUCCESSFUL`, then the app Gradle export with `androidx.health.connect:connect-client:1.1.0` and AGP `8.9.1` (`BUILD SUCCESSFUL`). `aapt dump` of `sweatpunk-debug.apk`: package `dev.sweatpunk.spike`, `sdkVersion` 26, `targetSdkVersion` 36, `compileSdkVersion` 36, abi `arm64-v8a`. Permissions `android.permission.health.READ_STEPS`, `READ_EXERCISE`, `READ_ACTIVE_CALORIES_BURNED`. Meta-data `org.godotengine.plugin.v2.HealthConnect` = `dev.sweatpunk.healthconnect.HealthConnectPlugin`. Activity `HealthConnectPermissionActivity` is in the manifest. | Permission sheet, today's steps, a manual entry versus a watch or phone recording, and a phone with no Health Connect provider. |
+| HealthKit | Partially | [iOS run 38968304226](https://github.com/hweeTan/godot-health/actions/runs/38968304226): scheme `sweatpunk`, `** BUILD SUCCEEDED **`. The link line includes `-framework HealthKit`, `-lhealthkit.ios.template_debug`, and `-lgodot-cpp.ios.template_debug.arm64`. The first compile kept the HealthKit entitlement. Team id in the preset is the placeholder `0000000000`. | Authorization dialog, step and workout reads, a sample with Was User Entered, and a signed install. Replace the placeholder team id before signing. |
+| AdMob rewarded test ad + UMP | Partially | Plugin v5.1.0. The APK manifest `com.google.android.gms.ads.APPLICATION_ID` is `ca-app-pub-3940256099942544~3347511713`. The Gradle command includes `com.google.android.libraries.ads.mobile.sdk:ads-mobile-sdk:1.4.0`. The iOS link line includes `-framework GoogleMobileAds` and `-framework UserMessagingPlatform` (Google Mobile Ads 13.9.0, UMP 3.1.0). | Initialize, load, and show the rewarded test ad, and confirm the UMP form under EEA debug geography. |
+| Android debug APK | Works | Run 38968304179 uploaded artifact `sweatpunk-debug-apk` (40,690,375 bytes, not expired). It contains the APK and `manifest-evidence.txt`. | Sideload, then the health and ad rows. |
+| iOS unsigned compile | Works | Run 38968304226 uploaded artifact `sweatpunk-ios-xcode` (127,796,739 bytes). `xcodebuild` used `CODE_SIGNING_ALLOWED=NO` and produced `sweatpunk.app/sweatpunk`. | A real team id and a signing setup before TestFlight. |
+| Play internal upload | Prepared, off | Job Play internal testing was skipped on run 38968304179 (`ENABLE_PLAY_INTERNAL` is unset). Lane `android internal` is in `fastlane/Fastfile`. When the variable is on, the job checks secrets and prints the fastlane command. | Play Console app, upload key, and a release AAB. This debug APK is the sideload build. |
+| TestFlight | Prepared, off | Job TestFlight was skipped on run 38968304226 (`ENABLE_TESTFLIGHT` is unset). Lane `ios beta` is in `fastlane/Fastfile`. | Apple Developer membership, match repo, the HealthKit capability on the App ID, and a real team id. |
