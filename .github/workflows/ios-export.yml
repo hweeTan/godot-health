@@ -48,7 +48,15 @@ jobs:
           set -euo pipefail
           project="$(find build/ios -name '*.xcodeproj' | head -n 1)"
           test -n "$project"
-          scheme="$(xcodebuild -project "$project" -list | awk '/Schemes:/{flag=1;next}/^$/{flag=0}flag{print $1; exit}')"
+          base="$(basename "$project" .xcodeproj)"
+          list="$(xcodebuild -project "$project" -list)"
+          printf '%s\n' "$list"
+          # The first scheme is the AdMob Swift package. Compile the app scheme.
+          scheme="$(printf '%s\n' "$list" | awk -v want="$base" '/Schemes:/{flag=1;next}/^$/{flag=0}flag && $1==want {print; exit}')"
+          if [[ -z "$scheme" ]]; then
+            scheme="$(printf '%s\n' "$list" | awk '/Schemes:/{flag=1;next}/^$/{flag=0}flag && $1 !~ /PoingGodotAdMob/ {print; exit}')"
+          fi
+          test -n "$scheme"
           echo "project=$project"
           echo "scheme=$scheme"
           set +e
