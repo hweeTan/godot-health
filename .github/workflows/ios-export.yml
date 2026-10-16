@@ -52,9 +52,9 @@ jobs:
           list="$(xcodebuild -project "$project" -list)"
           printf '%s\n' "$list"
           # The first scheme is the AdMob Swift package. Compile the app scheme.
-          scheme="$(printf '%s\n' "$list" | awk -v want="$base" '/Schemes:/{flag=1;next}/^$/{flag=0}flag && $1==want {print; exit}')"
+          scheme="$(printf '%s\n' "$list" | awk -v want="$base" '/Schemes:/{flag=1;next}/^$/{flag=0}flag && $1==want {print $1; exit}')"
           if [[ -z "$scheme" ]]; then
-            scheme="$(printf '%s\n' "$list" | awk '/Schemes:/{flag=1;next}/^$/{flag=0}flag && $1 !~ /PoingGodotAdMob/ {print; exit}')"
+            scheme="$(printf '%s\n' "$list" | awk '/Schemes:/{flag=1;next}/^$/{flag=0}flag && $1 !~ /PoingGodotAdMob/ {print $1; exit}')"
           fi
           test -n "$scheme"
           echo "project=$project"
