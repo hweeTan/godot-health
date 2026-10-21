@@ -1,0 +1,34 @@
+#!/usr/bin/env python
+"""Build the HealthKit GDExtension against godot-cpp (api_version 4.7)."""
+
+env = SConscript("godot-cpp/SConstruct", {"api_version": "4.7"})
+env.Append(CPPPATH=["src/"])
+
+sources = ["src/register_types.cpp", "src/healthkit_plugin.cpp"]
+if env["platform"] == "ios":
+    # Device and simulator are both arm64. Keep the object files apart so a
+    # simulator rebuild cannot replace the object archived into the device library.
+    if env.get("ios_simulator"):
+        apple_obj = "bin/healthkit_apple.simulator.o"
+    else:
+        apple_obj = "bin/healthkit_apple.device.o"
+    # SCons has no default builder for .mm. Force Objective-C++ explicitly.
+    apple = env.Command(
+        apple_obj,
+        "src/healthkit_apple.mm",
+        "$CXX -o $TARGET -c -x objective-c++ -fobjc-arc -fmodules $CXXFLAGS $CCFLAGS $_CCCOMCOM $SOURCE",
+    )
+    sources.append(apple)
+
+if env["platform"] == "ios":
+    # godot-cpp clears LIBSUFFIX on iOS, so the .a has to be part of the target name.
+    if env.get("ios_simulator"):
+        target_name = "bin/libhealthkit.ios.{}.simulator.a".format(env["target"])
+    else:
+        target_name = "bin/libhealthkit.ios.{}.a".format(env["target"])
+    library = env.StaticLibrary(target_name, source=sources)
+else:
+    target_name = "bin/libhealthkit.{}.{}".format(env["platform"], env["target"])
+    library = env.SharedLibrary(target_name + env["SHLIBSUFFIX"], source=sources)
+
+Default(library)

@@ -1,0 +1,159 @@
+name: Android debug APK
+
+on:
+  push:
+  workflow_dispatch:
+
+# The godot-ci image runs steps with /bin/sh (dash). pipefail and [[ ]] need bash.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  tests:
+    name: Headless tests
+    runs-on: ubuntu-latest
+    container:
+      image: barichello/godot-ci:4.7.2
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Import the project, then run GDScript tests
+        run: |
+          set -euo pipefail
+          godot --headless --path . --import
+          godot --headless --path . res://tests/test_runner.tscn
+
+  apk:
+    name: Build debug APK
+    runs-on: ubuntu-latest
+    container:
+      image: barichello/godot-ci:4.7.2
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use the image's Godot editor settings and export templates
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.config/godot" "$HOME/.local/share/godot/export_templates"
+          settings="$(find /root/.config/godot -name 'editor_settings-*.tres' | head -n 1)"
+          cp "$settings" "$HOME/.config/godot/$(basename "$settings")"
+          template_dir="$(find /root/.local/share/godot/export_templates -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+          cp -a "$template_dir" "$HOME/.local/share/godot/export_templates/"
+          echo "settings=$settings"
+          echo "templates=$template_dir"
+          test -f "$template_dir/android_source.zip"
+
+      - name: Install Android SDK 36 and NDK 29
+        run: |
+          set -euo pipefail
+          export ANDROID_HOME=/usr/lib/android-sdk
+          tools="$ANDROID_HOME/cmdline-tools/latest"
+          if [[ ! -x "$tools/bin/sdkmanager" ]]; then
+            tmp="$(mktemp -d)"
+            wget -q -O "$tmp/cmdtools.zip" https://dl.google.com/android/repository/commandlinetools-linux-13114758_latest.zip \
+              || wget -q -O "$tmp/cmdtools.zip" https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+            unzip -q "$tmp/cmdtools.zip" -d "$tmp"
+            mkdir -p "$ANDROID_HOME/cmdline-tools"
+            rm -rf "$tools"
+            mv "$tmp/cmdline-tools" "$tools"
+          fi
+          yes | "$tools/bin/sdkmanager" --sdk_root="$ANDROID_HOME" --licenses >/dev/null || true
+          "$tools/bin/sdkmanager" --sdk_root="$ANDROID_HOME" \
+            "platforms;android-36" \
+            "build-tools;36.1.0" \
+            "ndk;29.0.14206865" \
+            "platform-tools"
+
+      - name: Build the Health Connect plugin
+        run: bash tools/build_health_connect.sh
+
+      - name: Install the Android build template and raise AGP for Health Connect
+        run: |
+          set -euo pipefail
+          template_dir="$(find "$HOME/.local/share/godot/export_templates" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+          rm -rf android
+          mkdir -p android/build
+          unzip -q "$template_dir/android_source.zip" -d android/build
+          if [[ ! -f android/build/config.gradle && -f android/build/android_source/config.gradle ]]; then
+            mv android/build/android_source/* android/build/
+          fi
+          test -f android/build/config.gradle
+          # connect-client 1.1.0 refuses AGP older than 8.9.1. Godot 4.7.2 ships 8.6.1.
+          # 8.9.1 matches the template's Gradle 8.11.1 wrapper.
+          sed -i "s/androidGradlePlugin: '8.6.1'/androidGradlePlugin: '8.9.1'/" android/build/config.gradle
+          grep -n "androidGradlePlugin" android/build/config.gradle
+          printf '%s\n' "4.7.2.stable" > android/.build_version
+          touch android/build/.gdignore
+
+      - name: Export the debug APK
+        run: |
+          set -euo pipefail
+          mkdir -p build/android
+          godot --headless --verbose --path . --import
+          godot --headless --verbose --path . --export-debug "Android" build/android/sweatpunk-debug.apk
+          test -f build/android/sweatpunk-debug.apk
+
+      - name: Dump Health Connect and AdMob manifest evidence
+        run: |
+          set -euo pipefail
+          aapt="$(find /usr/lib/android-sdk/build-tools -name aapt | sort | tail -n 1)"
+          badging="$(mktemp)"
+          manifest="$(mktemp)"
+          "$aapt" dump badging build/android/sweatpunk-debug.apk > "$badging"
+          "$aapt" dump permissions build/android/sweatpunk-debug.apk > "$badging.perms"
+          "$aapt" dump xmltree build/android/sweatpunk-debug.apk AndroidManifest.xml > "$manifest"
+          {
+            echo "aapt=$aapt"
+            head -n 20 "$badging"
+            echo "----- permissions -----"
+            cat "$badging.perms"
+            echo "----- manifest matches -----"
+            grep -E -i 'health|APPLICATION_ID|HealthConnect|READ_STEPS|READ_EXERCISE|READ_ACTIVE' "$manifest" || true
+          } > build/android/manifest-evidence.txt
+          cat build/android/manifest-evidence.txt
+
+      - name: Upload the debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: sweatpunk-debug-apk
+          if-no-files-found: error
+          path: |
+            build/android/sweatpunk-debug.apk
+            build/android/manifest-evidence.txt
+
+  play-internal:
+    name: Play internal testing
+    needs: apk
+    # Stays skipped until the owner sets the repository variable ENABLE_PLAY_INTERNAL to true
+    # and adds the secrets listed in the README. This job is not part of the spike gate.
+    if: ${{ vars.ENABLE_PLAY_INTERNAL == 'true' }}
+    runs-on: ubuntu-latest
+    container:
+      image: barichello/godot-ci:4.7.2
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Require Play secrets
+        env:
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          ANDROID_UPLOAD_KEYSTORE_BASE64: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$PLAY_SERVICE_ACCOUNT_JSON"
+          test -n "$ANDROID_UPLOAD_KEYSTORE_BASE64"
+          test -n "$ANDROID_KEYSTORE_PASSWORD"
+          test -n "$ANDROID_KEY_ALIAS"
+          test -n "$ANDROID_KEY_PASSWORD"
+          printf '%s' "$PLAY_SERVICE_ACCOUNT_JSON" > "$RUNNER_TEMP/play.json"
+          base64 -d <<< "$ANDROID_UPLOAD_KEYSTORE_BASE64" > "$RUNNER_TEMP/upload.keystore"
+
+      - name: Fastlane lane stays uninvoked
+        run: |
+          echo "Secrets are present. This spike does not upload to Play."
+          echo "When a signed release AAB exists, run:"
+          echo "  PLAY_JSON_PATH=\$RUNNER_TEMP/play.json AAB_PATH=build/android/sweatpunk-release.aab bundle exec fastlane android internal"
+          echo "The lane is fastlane/Fastfile, platform android, lane internal."

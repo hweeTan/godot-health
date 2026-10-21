@@ -1,0 +1,2 @@
+package_name("dev.sweatpunk.spike")
+app_identifier("dev.sweatpunk.spike")
