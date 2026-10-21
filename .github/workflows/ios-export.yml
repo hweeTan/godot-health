@@ -8,7 +8,7 @@ jobs:
   xcode:
     name: Export and compile Xcode project
     runs-on: macos-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
 
@@ -27,13 +27,36 @@ jobs:
           cp -a "$RUNNER_TEMP/templates/templates/." "$HOME/Library/Application Support/Godot/export_templates/4.7.2.stable/"
           "$RUNNER_TEMP/godot/Godot.app/Contents/MacOS/Godot" --version
 
-      - name: Build the HealthKit GDExtension
+      - name: Install SCons
         run: |
           set -euo pipefail
           python3 -m venv "$RUNNER_TEMP/scons-venv"
           "$RUNNER_TEMP/scons-venv/bin/pip" install scons
-          export PATH="$RUNNER_TEMP/scons-venv/bin:$PATH"
-          bash tools/build_healthkit_ios.sh
+          echo "$RUNNER_TEMP/scons-venv/bin" >> "$GITHUB_PATH"
+
+      - name: Restore a patched iOS simulator template
+        id: sim-template
+        uses: actions/cache/restore@v4
+        with:
+          path: build/ios-sim-template/ios.zip
+          key: godot-4.7.2-ios-debug-arm64-simulator-v1
+
+      - name: Add an arm64 simulator slice to libgodot
+        run: |
+          set -euo pipefail
+          bash tools/ensure_ios_simulator_libgodot.sh \
+            "$HOME/Library/Application Support/Godot/export_templates/4.7.2.stable" \
+            build/ios-sim-template
+
+      - name: Save the patched iOS simulator template
+        if: steps.sim-template.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/ios-sim-template/ios.zip
+          key: godot-4.7.2-ios-debug-arm64-simulator-v1
+
+      - name: Build the HealthKit GDExtension
+        run: bash tools/build_healthkit_ios.sh
 
       - name: Export the Xcode project
         run: |
@@ -42,8 +65,9 @@ jobs:
           "$RUNNER_TEMP/godot/Godot.app/Contents/MacOS/Godot" --headless --verbose --path . \
             --export-debug "iOS" build/ios/sweatpunk.ipa
           find build/ios -maxdepth 3 -name '*.xcodeproj' -print
+          bash tools/check_ios_simulator_slices.sh
 
-      - name: Compile unsigned
+      - name: Compile unsigned for device
         run: |
           set -euo pipefail
           project="$(find build/ios -name '*.xcodeproj' | head -n 1)"
@@ -88,6 +112,39 @@ jobs:
               CODE_SIGN_ENTITLEMENTS="" \
               build
           fi
+
+      - name: Compile unsigned for the iOS Simulator
+        run: |
+          set -euo pipefail
+          project="$(find build/ios -name '*.xcodeproj' | head -n 1)"
+          test -n "$project"
+          base="$(basename "$project" .xcodeproj)"
+          list="$(xcodebuild -project "$project" -list)"
+          scheme="$(printf '%s\n' "$list" | awk -v want="$base" '/Schemes:/{flag=1;next}/^$/{flag=0}flag && $1==want {print $1; exit}')"
+          test -n "$scheme"
+          echo "project=$project"
+          echo "scheme=$scheme"
+          xcodebuild \
+            -project "$project" \
+            -scheme "$scheme" \
+            -sdk iphonesimulator \
+            -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/DerivedDataSim" \
+            ARCHS=arm64 \
+            ONLY_ACTIVE_ARCH=YES \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+          bin="$(find "$RUNNER_TEMP/DerivedDataSim" -type f -path '*Debug-iphonesimulator*/sweatpunk.app/sweatpunk' | head -n 1)"
+          test -n "$bin"
+          archs="$(lipo -archs "$bin")"
+          echo "simulator binary: $bin"
+          echo "simulator binary archs: $archs"
+          test "$archs" = "arm64"
+          otool -L "$bin"
+          otool -L "$bin" | grep -q HealthKit.framework
 
       - name: Upload the Xcode project
         uses: actions/upload-artifact@v4

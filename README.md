@@ -75,7 +75,7 @@ python3 -m pip install scons
 bash tools/build_healthkit_ios.sh
 ```
 
-godot-cpp is fetched at commit `2bb1acf6f8ae1ce96ac7b9ba3a10b499c59c49ec` (master on 16 Oct 2026). That commit accepts `api_version=4.7`. The released godot-cpp tags stop at 4.5, so a tag pin cannot build a 4.7 extension. SwiftGodot was not used: its 4.7 binding tracks an unreleased engine commit, which is a poor CI pin.
+That builds device and arm64-simulator static libraries, then packs each into an xcframework (`ios-arm64` and a simulator slice). godot-cpp is fetched at commit `2bb1acf6f8ae1ce96ac7b9ba3a10b499c59c49ec` (master on 16 Oct 2026). That commit accepts `api_version=4.7`. The released godot-cpp tags stop at 4.5, so a tag pin cannot build a 4.7 extension. SwiftGodot was not used: its 4.7 binding tracks an unreleased engine commit, which is a poor CI pin.
 
 ## Install the APK from Actions
 
@@ -90,7 +90,72 @@ adb install -r sweatpunk-debug.apk
 
 The APK is a debug build, arm64-v8a only, package `dev.sweatpunk.spike`, signed with the godot-ci debug keystore. Health Connect must be installed on the phone (Android 14+ has it in the system; older devices need the Health Connect app). The health permission sheet is the first thing to try.
 
-The iOS workflow uploads `sweatpunk-ios-xcode`. That project is unsigned. It is for the compile check, not for a phone install. The export preset uses team id `0000000000` because Godot refuses to write an Xcode project with a blank team id. Replace it with the Apple Developer team id before any signed or TestFlight build.
+The iOS workflow uploads `sweatpunk-ios-xcode`. That project is unsigned. It is for the compile check, not for a phone install. The export preset uses team id `0000000000` because Godot refuses to write an Xcode project with a blank team id. Replace it with the Apple Developer team id before any signed or TestFlight build. The Simulator does not need that account. See below.
+
+## Run in iOS Simulator
+
+Apple Silicon, Xcode 27.1, Godot 4.7.2. A paid Apple Developer account is not required. The project renderer is `gl_compatibility` because Godot's iOS Simulator library is built with Metal and Vulkan turned off.
+
+Godot 4.7.2's official `ios.zip` lists an arm64 simulator slice, but `libgodot.a` and `libgodot_camera.a` in that slice are x86_64 only. `tools/ensure_ios_simulator_libgodot.sh` compiles the missing arm64 debug slice from the `4.7.2-stable` tag and lipos it in. The first run builds the engine. Later runs see arm64 already present and skip the compile.
+
+The AdMob v5.1.0 iOS template already ships `poing-godot-admob-ads.debug.xcframework` with an `ios-arm64_x86_64-simulator` library that contains arm64 and x86_64. Headless export downloads it. CI checks the slice with `lipo`.
+
+```bash
+python3 -m pip install scons
+
+# Export templates installed by the Godot editor (Export -> Manage Export Templates).
+TEMPLATES="$HOME/Library/Application Support/Godot/export_templates/4.7.2.stable"
+bash tools/ensure_ios_simulator_libgodot.sh "$TEMPLATES"
+
+bash tools/build_healthkit_ios.sh
+
+GODOT="/Applications/Godot.app/Contents/MacOS/Godot"
+"$GODOT" --headless --path . --export-debug "iOS" build/ios/sweatpunk.ipa
+
+# Compile for arm64 Simulator without a signing team.
+xcodebuild \
+  -project build/ios/sweatpunk.xcodeproj \
+  -scheme sweatpunk \
+  -configuration Debug \
+  -sdk iphonesimulator \
+  -destination 'generic/platform=iOS Simulator' \
+  -derivedDataPath build/ios/DerivedDataSim \
+  ARCHS=arm64 \
+  ONLY_ACTIVE_ARCH=YES \
+  CODE_SIGNING_ALLOWED=YES \
+  CODE_SIGN_IDENTITY=- \
+  DEVELOPMENT_TEAM= \
+  build
+
+# Boot the first available iPhone and install.
+DEVICE_ID="$(xcrun simctl list devices available -j | python3 -c '
+import json, sys
+data = json.load(sys.stdin)
+for runtime, devices in data.get("devices", {}).items():
+    if "iOS" not in runtime:
+        continue
+    for device in devices:
+        if device.get("isAvailable") and device.get("name", "").startswith("iPhone"):
+            print(device["udid"])
+            raise SystemExit
+sys.exit("no iPhone simulator")
+')"
+xcrun simctl boot "$DEVICE_ID" || true
+open -a Simulator
+APP="$(find build/ios/DerivedDataSim -path '*Debug-iphonesimulator*' -name 'sweatpunk.app' -type d | head -n 1)"
+xcrun simctl install "$DEVICE_ID" "$APP"
+xcrun simctl launch "$DEVICE_ID" dev.sweatpunk.spike
+```
+
+Opening `build/ios/sweatpunk.xcodeproj` in Xcode and choosing an iPhone simulator as the run destination is the same compile.
+
+Fake health data, in the Simulator's Health app:
+
+1. Open Health and finish the welcome screens. An Apple ID is not required.
+2. Tap Browse, search **Steps**, open Steps, tap **Add Data**, set the date to today, enter a step count, tap Add.
+3. Search **Workouts**, open Workouts, tap **Add Data**. Choose Walking or Running, set a start and end today, enter energy if the form asks, tap Add.
+4. In Sweatpunk, tap **Request health permission** and allow the types on the sheet, then tap **Refresh steps and workouts**.
+5. The debug screen lists today's steps and the workout. Samples added in the Health app are manual entries, so the row is marked manual.
 
 ## Owner setup
 
@@ -145,7 +210,7 @@ Permission UI is a real activity (`HealthConnectPermissionActivity`) with a rati
 
 ### HealthKit (iOS)
 
-GDExtension singleton `HealthKit`. Read types: step count, Apple Exercise Time, active energy, workouts. `HKMetadataKeyWasUserEntered` sets `manual: true`. Active minutes are Apple Exercise Time. The export plugin links `HealthKit.framework`. Usage strings and the HealthKit entitlement are in the iOS export preset.
+GDExtension singleton `HealthKit`. Read types: step count, Apple Exercise Time, active energy, workouts. `HKMetadataKeyWasUserEntered` sets `manual: true`. Active minutes are Apple Exercise Time. The export plugin links `HealthKit.framework`. Usage strings and the HealthKit entitlement are in the iOS export preset. The debug xcframework contains an arm64 device slice and an arm64 simulator slice. HealthKit accepts sample data in the Simulator.
 
 If unsigned `xcodebuild` rejects that entitlement, the workflow retries without `CODE_SIGN_ENTITLEMENTS` and says so in the log. A device or TestFlight build has to put the entitlement back and sign with a HealthKit-enabled profile.
 
@@ -171,7 +236,7 @@ UMP uses `ConsentInformation.update`, then `load_consent_form` when a form is of
 | Workflow | When | Result |
 | --- | --- | --- |
 | `.github/workflows/android-debug.yml` | every push | Headless tests, then a debug APK artifact. |
-| `.github/workflows/ios-export.yml` | every push | macOS export of the Xcode project and an unsigned `iphoneos` compile. macOS minutes are real; switch this to a nightly schedule after the spike if the bill matters. |
+| `.github/workflows/ios-export.yml` | every push | macOS export of the Xcode project, an unsigned `iphoneos` compile, and an unsigned arm64 `iphonesimulator` compile. macOS minutes are real; switch this to a nightly schedule after the spike if the bill matters. |
 | Play internal / TestFlight | only if the variables above are `true` | Secret check, then a printed fastlane command. The job stops there. |
 
 `barichello/godot-ci:4.7.2` starts each step with `sh` (dash). Dash rejects `set -o pipefail` and the step exits 2 before Godot runs. Both container jobs (Headless tests and Build debug APK) died that way on the first Actions run. The Android workflow sets `defaults.run.shell: bash`. Run [38968304179](https://github.com/hweeTan/godot-health/actions/runs/38968304179) logs `shell: bash --noprofile --norc -e -o pipefail {0}` for those steps, and Headless tests printed `TESTS PASSED`.

@@ -6,9 +6,15 @@ env.Append(CPPPATH=["src/"])
 
 sources = ["src/register_types.cpp", "src/healthkit_plugin.cpp"]
 if env["platform"] == "ios":
+    # Device and simulator are both arm64. Keep the object files apart so a
+    # simulator rebuild cannot replace the object archived into the device library.
+    if env.get("ios_simulator"):
+        apple_obj = "bin/healthkit_apple.simulator.o"
+    else:
+        apple_obj = "bin/healthkit_apple.device.o"
     # SCons has no default builder for .mm. Force Objective-C++ explicitly.
     apple = env.Command(
-        "src/healthkit_apple.o",
+        apple_obj,
         "src/healthkit_apple.mm",
         "$CXX -o $TARGET -c -x objective-c++ -fobjc-arc -fmodules $CXXFLAGS $CCFLAGS $_CCCOMCOM $SOURCE",
     )
